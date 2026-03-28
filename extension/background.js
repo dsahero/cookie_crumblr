@@ -1,9 +1,6 @@
 // Cookie Crumbler Background Script
 // Periodically scans and scrambles tracking cookies
 
-// Import shared cookie management functions
-importScripts('cookieManager.js');
-
 // Alarm interval in minutes
 const SCAN_INTERVAL = 1; // 60 seconds
 

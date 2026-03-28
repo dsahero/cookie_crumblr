@@ -1,9 +1,6 @@
 // Cookie Crumbler Popup Script
 // Handles user-triggered cookie scrambling
 
-// Import shared cookie management functions
-importScripts('cookieManager.js');
-
 // Wait for DOM to load
 document.addEventListener('DOMContentLoaded', () => {
   const scrambleButton = document.getElementById('scrambleButton');
