@@ -6,9 +6,14 @@ const CATEGORY_CLASS = {
   functional: 'cookie-card__tag--functional',
 };
 
-export default function CookieCard({ name, category, categoryKind, primaryAction }) {
-  const primaryIsBlock = primaryAction === 'block';
-
+export default function CookieCard({
+  name,
+  category,
+  categoryKind,
+  allowed,
+  onToggle,
+  onDelete,
+}) {
   return (
     <article className="cookie-card">
       <div className="cookie-card__main">
@@ -23,12 +28,23 @@ export default function CookieCard({ name, category, categoryKind, primaryAction
         <button
           type="button"
           className={`cookie-card__btn cookie-card__btn--primary ${
-            primaryIsBlock ? 'cookie-card__btn--block' : 'cookie-card__btn--allow'
+            allowed ? 'cookie-card__btn--block' : 'cookie-card__btn--allow'
           }`}
+          onClick={onToggle}
+          aria-label={
+            allowed
+              ? `Block cookie ${name}`
+              : `Unblock cookie ${name}`
+          }
         >
-          {primaryIsBlock ? 'Block' : 'Allow'}
+          {allowed ? 'Block' : 'Unblock'}
         </button>
-        <button type="button" className="cookie-card__btn cookie-card__btn--delete">
+        <button
+          type="button"
+          className="cookie-card__btn cookie-card__btn--delete"
+          onClick={onDelete}
+          aria-label={`Delete cookie ${name}`}
+        >
           Delete
         </button>
       </div>

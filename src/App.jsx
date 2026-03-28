@@ -1,4 +1,4 @@
-import { useState } from 'react';
+import { useCallback, useState } from 'react';
 import SummaryCard from './components/SummaryCard.jsx';
 import Toggle from './components/Toggle.jsx';
 import CookieCard from './components/CookieCard.jsx';
@@ -11,25 +11,25 @@ const COOKIE_ROWS = [
     name: '_ga',
     category: 'Analytics',
     categoryKind: 'analytics',
-    primaryAction: 'allow',
+    allowed: true,
   },
   {
     name: '_fbp',
     category: 'Marketing',
     categoryKind: 'marketing',
-    primaryAction: 'allow',
+    allowed: true,
   },
   {
     name: 'session_id',
     category: 'Functional',
     categoryKind: 'functional',
-    primaryAction: 'block',
+    allowed: false,
   },
   {
     name: '_gid',
     category: 'Analytics',
     categoryKind: 'analytics',
-    primaryAction: 'allow',
+    allowed: true,
   },
 ];
 
@@ -40,11 +40,57 @@ const LOCK_HINT_SETTINGS =
 const LOCK_HINT_ADVANCED =
   'Turn on protection to open advanced controls.';
 
+const initialCookieAllowedByName = () =>
+  Object.fromEntries(COOKIE_ROWS.map((row) => [row.name, row.allowed]));
+
 export default function App() {
   const [screen, setScreen] = useState('main');
   const [protectionOn, setProtectionOn] = useState(true);
   const [blockHarmful, setBlockHarmful] = useState(true);
   const [clipboardProtection, setClipboardProtection] = useState(false);
+  const [cookieRows, setCookieRows] = useState(() => [...COOKIE_ROWS]);
+  const [cookieAllowedByName, setCookieAllowedByName] = useState(
+    initialCookieAllowedByName,
+  );
+  const [exitingNames, setExitingNames] = useState(() => new Set());
+
+  const toggleCookieAllowed = (name) => {
+    setCookieAllowedByName((prev) => ({ ...prev, [name]: !prev[name] }));
+  };
+
+  const requestDeleteCookie = (name) => {
+    setExitingNames((prev) => new Set(prev).add(name));
+  };
+
+  const finishRemoveCookie = useCallback((name) => {
+    setCookieRows((rows) => rows.filter((row) => row.name !== name));
+    setCookieAllowedByName((prev) => {
+      const next = { ...prev };
+      delete next[name];
+      return next;
+    });
+    setExitingNames((prev) => {
+      const next = new Set(prev);
+      next.delete(name);
+      return next;
+    });
+  }, []);
+
+  const handleCookieRowTransitionEnd = (e, name) => {
+    if (e.target !== e.currentTarget) return;
+    if (e.propertyName !== 'opacity') return;
+    if (exitingNames.has(name)) finishRemoveCookie(name);
+  };
+
+  const handleRestart = useCallback(() => {
+    setScreen('main');
+    setProtectionOn(true);
+    setBlockHarmful(true);
+    setClipboardProtection(false);
+    setCookieRows([...COOKIE_ROWS]);
+    setCookieAllowedByName(initialCookieAllowedByName());
+    setExitingNames(new Set());
+  }, []);
 
   return (
     <div className="popup-root">
@@ -176,17 +222,46 @@ export default function App() {
             </header>
 
             <ul className="cookie-list">
-              {COOKIE_ROWS.map((row) => (
-                <li key={row.name} className="cookie-list__item">
-                  <CookieCard
-                    name={row.name}
-                    category={row.category}
-                    categoryKind={row.categoryKind}
-                    primaryAction={row.primaryAction}
-                  />
+              {cookieRows.length === 0 ? (
+                <li className="cookie-list__empty">
+                  No cookies in this list.
                 </li>
-              ))}
+              ) : (
+                cookieRows.map((row) => (
+                  <li
+                    key={row.name}
+                    className={`cookie-list__item ${
+                      exitingNames.has(row.name)
+                        ? 'cookie-list__item--removing'
+                        : ''
+                    }`}
+                    onTransitionEnd={(e) =>
+                      handleCookieRowTransitionEnd(e, row.name)
+                    }
+                  >
+                    <CookieCard
+                      name={row.name}
+                      category={row.category}
+                      categoryKind={row.categoryKind}
+                      allowed={cookieAllowedByName[row.name]}
+                      onToggle={() => toggleCookieAllowed(row.name)}
+                      onDelete={() => requestDeleteCookie(row.name)}
+                    />
+                  </li>
+                ))
+              )}
             </ul>
+
+            <div className="details-footer">
+              <button
+                type="button"
+                className="btn-restart"
+                onClick={handleRestart}
+                aria-label="Recrumble cookies and reset all settings to defaults"
+              >
+                Recrumble cookies
+              </button>
+            </div>
           </section>
         </div>
       </div>
