@@ -1,0 +1,43 @@
+{
+  "manifest_version": 2,
+  "name": "Cookie Crumbler",
+  "version": "1.0.0",
+  "description": "Protecting children and targeted minorities by simplifying cookie and privacy management with AI-powered classification.",
+
+  "icons": {
+    "48": "icons/icon48.png",
+    "96": "icons/icon96.png"
+  },
+
+  "browser_action": {
+    "default_icon": "icons/icon48.png",
+    "default_popup": "popup.html",
+    "default_title": "Cookie Crumbler"
+  },
+
+  "permissions": [
+    "cookies",
+    "storage",
+    "alarms",
+    "tabs",
+    "activeTab",
+    "browsingData",
+    "webRequest",
+    "webRequestBlocking",
+    "<all_urls>"
+  ],
+
+  "background": {
+    "scripts": ["background.js"],
+    "persistent": true
+  },
+
+  "content_security_policy": "script-src 'self'; object-src 'self'",
+
+  "browser_specific_settings": {
+    "gecko": {
+      "id": "cookie-crumbler@extension",
+      "strict_min_version": "91.0"
+    }
+  }
+}
