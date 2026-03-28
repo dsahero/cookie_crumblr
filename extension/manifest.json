@@ -18,12 +18,9 @@
   "permissions": [
     "cookies",
     "storage",
-    "alarms",
     "tabs",
     "activeTab",
     "browsingData",
-    "webRequest",
-    "webRequestBlocking",
     "<all_urls>"
   ],
 
