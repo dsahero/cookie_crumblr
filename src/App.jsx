@@ -33,6 +33,13 @@ const COOKIE_ROWS = [
   },
 ];
 
+const LOCK_HINT_SUMMARY =
+  'Turn on protection to use the cookie summary.';
+const LOCK_HINT_SETTINGS =
+  'Turn on protection to change these settings.';
+const LOCK_HINT_ADVANCED =
+  'Turn on protection to open advanced controls.';
+
 export default function App() {
   const [screen, setScreen] = useState('main');
   const [protectionOn, setProtectionOn] = useState(true);
@@ -83,30 +90,69 @@ export default function App() {
             </div>
 
             <div className="popup-stack">
-              <SummaryCard total={24} harmful={18} safe={6} />
+              <div
+                className={`feature-zone ${!protectionOn ? 'feature-zone--locked' : ''}`}
+              >
+                {!protectionOn && (
+                  <div
+                    role="presentation"
+                    className="feature-zone__blocker"
+                    title={LOCK_HINT_SUMMARY}
+                  />
+                )}
+                <SummaryCard
+                  total={24}
+                  harmful={18}
+                  safe={6}
+                  inactive={!protectionOn}
+                />
+              </div>
 
-              <div className="settings-stack">
+              <div
+                className={`feature-zone settings-stack ${!protectionOn ? 'feature-zone--locked' : ''}`}
+              >
+                {!protectionOn && (
+                  <div
+                    role="presentation"
+                    className="feature-zone__blocker"
+                    title={LOCK_HINT_SETTINGS}
+                  />
+                )}
                 <Toggle
                   label="Block harmful cookies"
                   checked={blockHarmful}
                   onChange={setBlockHarmful}
                   id="toggle-block"
+                  disabled={!protectionOn}
                 />
                 <Toggle
                   label="Clipboard protection"
                   checked={clipboardProtection}
                   onChange={setClipboardProtection}
                   id="toggle-clipboard"
+                  disabled={!protectionOn}
                 />
               </div>
 
-              <button
-                type="button"
-                className="btn-advanced"
-                onClick={() => setScreen('details')}
+              <div
+                className={`feature-zone feature-zone--footer ${!protectionOn ? 'feature-zone--locked' : ''}`}
               >
-                Advanced controls
-              </button>
+                {!protectionOn && (
+                  <div
+                    role="presentation"
+                    className="feature-zone__blocker"
+                    title={LOCK_HINT_ADVANCED}
+                  />
+                )}
+                <button
+                  type="button"
+                  className="btn-advanced"
+                  disabled={!protectionOn}
+                  onClick={() => protectionOn && setScreen('details')}
+                >
+                  Advanced controls
+                </button>
+              </div>
             </div>
           </main>
 

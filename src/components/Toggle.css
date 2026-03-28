@@ -54,3 +54,15 @@
 .toggle--on .toggle__thumb {
   transform: translateX(20px);
 }
+
+.toggle-row--disabled .toggle-row__label {
+  color: var(--color-text-secondary);
+}
+
+.toggle--disabled {
+  cursor: not-allowed;
+}
+
+.toggle:disabled:focus-visible {
+  outline: none;
+}

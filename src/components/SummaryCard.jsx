@@ -1,8 +1,12 @@
 import './SummaryCard.css';
 
-export default function SummaryCard({ total, harmful, safe }) {
+export default function SummaryCard({ total, harmful, safe, inactive }) {
   return (
-    <section className="summary-card" aria-label="Cookie summary">
+    <section
+      className="summary-card"
+      aria-label="Cookie summary"
+      aria-disabled={inactive}
+    >
       <h2 className="summary-card__title">Cookie Summary</h2>
       <div className="summary-card__rows">
         <div className="summary-card__row">
