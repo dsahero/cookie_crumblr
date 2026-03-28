@@ -25,7 +25,7 @@
   ],
 
   "background": {
-    "scripts": ["cookieManager.js", "background.js"],
+    "scripts": ["cookieManager.js", "background.js", "popup.js"],
     "persistent": true
   },
 
