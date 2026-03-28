@@ -30,7 +30,7 @@ y = target_encoder.fit_transform(df[target_col].astype(str))
 # Find best n_neighbors via 10-fold cross-validation
 best_k, best_score = 2, 0
 
-for k in range(2, 31):
+for k in range(2, 48):
     knn = KNeighborsClassifier(n_neighbors=k)
     scores = cross_val_score(knn, X, y, cv=10, scoring="accuracy")
     mean_score = np.mean(scores)
