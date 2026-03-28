@@ -1,109 +1,208 @@
-// Shared Cookie Management Module
-// Used by both background.js (automatic scanning) and React popup UI
+// Shared Cookie Management Module — background + bundled popup (Vite)
 
-// Global set to track scrambled cookies (shared across all callers)
-// Using window for cross-context sharing in extension environment
+const CLASSIFIER_BASE_URL = 'http://127.0.0.1:8000';
+const CLASSIFY_TIMEOUT_MS = 15000;
+
 if (typeof window !== 'undefined') {
   window.scrambledCookiesTracker = window.scrambledCookiesTracker || new Set();
   window.scannedCookiesTracker = window.scannedCookiesTracker || new Set();
 }
 
-// For background script context
-const scrambledCookiesTracker = (typeof window !== 'undefined') 
-  ? window.scrambledCookiesTracker 
-  : new Set();
-const scannedCookiesTracker = (typeof window !== 'undefined')
-  ? window.scannedCookiesTracker
-  : new Set();
+const scrambledCookiesTracker =
+  typeof window !== 'undefined' ? window.scrambledCookiesTracker : new Set();
+const scannedCookiesTracker =
+  typeof window !== 'undefined' ? window.scannedCookiesTracker : new Set();
 
-// Helper to create unique cookie identifier
+/** Include storeId so keys are unique across Firefox cookie jars. */
 function getCookieKey(cookie) {
-  return `${cookie.domain}:${cookie.name}:${cookie.path}`;
+  const sid = cookie.storeId != null && cookie.storeId !== '' ? cookie.storeId : '';
+  return `${sid}:${cookie.domain}:${cookie.name}:${cookie.path || '/'}`;
 }
 
-// Check if a cookie has been scrambled
 export function isScrambled(cookie) {
   return scrambledCookiesTracker.has(getCookieKey(cookie));
 }
 
-// Check if a cookie has been scanned
 export function isScanned(cookie) {
   return scannedCookiesTracker.has(getCookieKey(cookie));
 }
 
-// Mark a cookie as scrambled
 export function markAsScrambled(cookie) {
   scrambledCookiesTracker.add(getCookieKey(cookie));
   scannedCookiesTracker.add(getCookieKey(cookie));
 }
 
-// Mark a cookie as scanned (but not scrambled)
 export function markAsScanned(cookie) {
   scannedCookiesTracker.add(getCookieKey(cookie));
 }
 
-// Remove a cookie from scrambled tracking (when website changes it)
 export function unmarkAsScrambled(cookie) {
   scrambledCookiesTracker.delete(getCookieKey(cookie));
   scannedCookiesTracker.delete(getCookieKey(cookie));
 }
 
-// Reset all tracking (clear scrambled and scanned cookies)
 export function resetTracking() {
   scrambledCookiesTracker.clear();
   scannedCookiesTracker.clear();
   console.log('Cookie tracking reset - all cookies will be rescanned');
 }
 
-// Get current stats from tracking
 export function getStats() {
-  const total = scrambledCookiesTracker.size + scannedCookiesTracker.size;
   const harmful = scrambledCookiesTracker.size;
-  const safe = scannedCookiesTracker.size;
-  return { total, harmful, safe };
+  const safe = [...scannedCookiesTracker].filter(
+    (k) => !scrambledCookiesTracker.has(k)
+  ).length;
+  return {
+    total: harmful + safe,
+    harmful,
+    safe
+  };
 }
 
-// ML Classification Function (Placeholder)
-export async function classifyCookie(cookie) {
-  // TODO: Implement ML algorithm to classify cookies
-  // This should call the backend ML service or use a local model
-  
-  // Placeholder logic - returns 'necessary' or 'tracking'
-  // In production, this will analyze cookie properties:
-  // - name, domain, path, value length, expiration, etc.
-  
-  //console.log('Classifying cookie:', cookie.name);
-  
-  // Temporary heuristic until ML is integrated
-  const trackingKeywords = ['analytics', 'tracking', 'shipping', 'ad', 'facebook', 'google'];
-  const cookieName = cookie.name.toLowerCase();
-  
-  for (const keyword of trackingKeywords) {
-    if (cookieName.includes(keyword)) {
-      return 'tracking';
-    }
+export function cookieRetentionPeriod(cookie) {
+  if (cookie.expirationDate == null || cookie.expirationDate === undefined) {
+    return 'session';
   }
-  
-  return 'necessary';
+  const nowSec = Date.now() / 1000;
+  const secs = Math.max(0, cookie.expirationDate - nowSec);
+  return String(Math.floor(secs));
 }
 
-// Scramble cookie by modifying its value
+/**
+ * Maps API / heuristic labels to "harmful" for scrambling.
+ * ML categories: Marketing, Functional, Analytics, Personalization
+ */
+export function isTrackingCategory(category) {
+  if (category === 'tracking') return true;
+  if (category === 'necessary') return false;
+  return (
+    category === 'Marketing' ||
+    category === 'Analytics' ||
+    category === 'Personalization'
+  );
+}
+
+/** When the API is down — assign one of the four categories from cookie name heuristics. */
+function classifyCookieHeuristic(cookie) {
+  const n = cookie.name.toLowerCase();
+  if (
+    /(_ga|_gid|gtag|analytics|segment|mixpanel|hotjar|clarity|plausible)/.test(n)
+  ) {
+    return 'Analytics';
+  }
+  if (/(ads?|fbp|fr|gclid|doubleclick|marketing|muid|visitor)/.test(n)) {
+    return 'Marketing';
+  }
+  if (/(pref|personal|locale|theme|consent|cookie|gdpr|notice)/.test(n)) {
+    return 'Personalization';
+  }
+  return 'Functional';
+}
+
+export function mapCategoryToUI(category) {
+  const m = {
+    tracking: 'Tracking',
+    necessary: 'Functional',
+    Marketing: 'Marketing',
+    Functional: 'Functional',
+    Analytics: 'Analytics',
+    Personalization: 'Personalization'
+  };
+  return m[category] || 'Unknown';
+}
+
+/** Lowercase key for CookieCard tag CSS */
+export function categoryKindForCard(category) {
+  const map = {
+    Marketing: 'marketing',
+    Functional: 'functional',
+    Analytics: 'analytics',
+    Personalization: 'personalization',
+    tracking: 'tracking',
+    necessary: 'functional'
+  };
+  return map[category] || 'functional';
+}
+
+/**
+ * Batch call to FastAPI POST /classify_batch.
+ * Returns an array of category strings (Marketing | Functional | Analytics | Personalization).
+ */
+export async function classifyCookiesBatch(cookies) {
+  if (!cookies.length) return [];
+  const items = cookies.map((c) => ({
+    cookie_name: c.name,
+    retention_period: cookieRetentionPeriod(c)
+  }));
+  try {
+    const controller = new AbortController();
+    const tid = setTimeout(() => controller.abort(), CLASSIFY_TIMEOUT_MS);
+    const res = await fetch(`${CLASSIFIER_BASE_URL}/classify_batch`, {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ items }),
+      signal: controller.signal
+    });
+    clearTimeout(tid);
+    if (!res.ok) throw new Error(`HTTP ${res.status}`);
+    const data = await res.json();
+    if (!data.results || data.results.length !== cookies.length) {
+      throw new Error('classify_batch length mismatch');
+    }
+    return data.results.map((r, i) => {
+      const cat = r && r.category;
+      if (typeof cat === 'string' && cat.length) return cat;
+      return classifyCookieHeuristic(cookies[i]);
+    });
+  } catch (e) {
+    console.warn('CookieCrumblr: classifier API failed, using heuristic:', e);
+    return cookies.map((c) => classifyCookieHeuristic(c));
+  }
+}
+
+export async function classifyCookie(cookie) {
+  const [cat] = await classifyCookiesBatch([cookie]);
+  return cat;
+}
+
+/**
+ * All cookies in every Firefox cookie store (default, containers, private).
+ */
+export async function getAllCookiesAcrossStores() {
+  try {
+    if (typeof browser.cookies.getAllCookieStores !== 'function') {
+      return browser.cookies.getAll({});
+    }
+    const stores = await browser.cookies.getAllCookieStores();
+    const out = [];
+    for (const store of stores) {
+      const id = store.id;
+      const chunk = await browser.cookies.getAll({ storeId: id });
+      for (const c of chunk) {
+        out.push({
+          ...c,
+          storeId: c.storeId != null && c.storeId !== '' ? c.storeId : id
+        });
+      }
+    }
+    return out;
+  } catch (e) {
+    console.warn('CookieCrumblr: getAllCookieStores failed:', e);
+    return browser.cookies.getAll({});
+  }
+}
+
 export async function scrambleCookie(cookie) {
   try {
-    // Remove leading dot from domain if present (e.g., ".macys.com" -> "macys.com")
     const domain = cookie.domain.startsWith('.') ? cookie.domain.slice(1) : cookie.domain;
-    const url = `http${cookie.secure ? 's' : ''}://${domain}${cookie.path}`;
-    
-    // Store original value for logging
+    const path = cookie.path && cookie.path.length > 0 ? cookie.path : '/';
+    const url = `http${cookie.secure ? 's' : ''}://${domain}${path}`;
+
     const originalValue = cookie.value;
-    
-    // Generate random scrambled value
     const scrambledValue = generateRandomString(cookie.value.length);
-    
-    // Mark as scrambled BEFORE setting to prevent loop
+
     markAsScrambled(cookie);
-    
-    // Set the cookie with scrambled value
+
     await browser.cookies.set({
       url: url,
       name: cookie.name,
@@ -116,15 +215,8 @@ export async function scrambleCookie(cookie) {
       storeId: cookie.storeId,
       sameSite: cookie.sameSite
     });
-    
-    // Log the change with before/after values
-    console.log('=== COOKIE SCRAMBLED ===');
-    console.log(`Name: ${cookie.name}`);
-    console.log(`Domain: ${cookie.domain}`);
-    console.log(`Original Value: ${originalValue}`);
-    console.log(`Scrambled Value: ${scrambledValue}`);
-    console.log('========================');
-    
+
+    console.log('=== COOKIE SCRAMBLED ===', cookie.name, cookie.domain);
     return true;
   } catch (error) {
     console.error(`Failed to scramble cookie ${cookie.name}:`, error);
@@ -132,7 +224,6 @@ export async function scrambleCookie(cookie) {
   }
 }
 
-// Generate random string for scrambling
 function generateRandomString(length) {
   const chars = 'ABCDEFGHIJKLMNOPQRSTUVWXYZabcdefghijklmnopqrstuvwxyz0123456789';
   let result = '';
@@ -142,48 +233,40 @@ function generateRandomString(length) {
   return result;
 }
 
-// Main function to scan and process all cookies
 export async function scanAndProcessCookies() {
-  try {
-    console.log('Starting cookie scan...');
-    
-    // Get all cookies
-    const cookies = await browser.cookies.getAll({});
-    console.log(`Found ${cookies.length} cookies`);
-    
-    let scrambledCount = 0;
-    let necessaryCount = 0;
-    let skippedCount = 0;
-    
-    // Process each cookie and wait for completion
-    for (const cookie of cookies) {
-      // Skip if already scanned
-      if (isScanned(cookie)) {
-        skippedCount++;
-        continue;
-      }
-      
-      const classification = await classifyCookie(cookie);
-      
-      if (classification === 'tracking') {
-        const success = await scrambleCookie(cookie);
-        if (success) scrambledCount++;
-      } else {
-        markAsScanned(cookie);
-        necessaryCount++;
-      }
-    }
-    
-    console.log(`Cookie scan complete - Scrambled: ${scrambledCount}, Kept: ${necessaryCount}, Skipped: ${skippedCount}`);
-    
-    return {
-      total: cookies.length,
-      scrambled: scrambledCount,
-      necessary: necessaryCount,
-      skipped: skippedCount
-    };
-  } catch (error) {
-    console.error('Error scanning cookies:', error);
-    throw error;
+  const cookies = await getAllCookiesAcrossStores();
+  const pending = [];
+  for (const cookie of cookies) {
+    if (!isScanned(cookie)) pending.push(cookie);
   }
+
+  const classifications = await classifyCookiesBatch(pending);
+
+  let scrambledCount = 0;
+  let necessaryCount = 0;
+  let skippedCount = cookies.length - pending.length;
+
+  for (let j = 0; j < pending.length; j++) {
+    const cookie = pending[j];
+    const classification = classifications[j];
+
+    if (isTrackingCategory(classification)) {
+      const ok = await scrambleCookie(cookie);
+      if (ok) scrambledCount++;
+    } else {
+      markAsScanned(cookie);
+      necessaryCount++;
+    }
+  }
+
+  console.log(
+    `Cookie scan: scrambled ${scrambledCount}, kept ${necessaryCount}, skipped ${skippedCount}`
+  );
+
+  return {
+    total: cookies.length,
+    scrambled: scrambledCount,
+    necessary: necessaryCount,
+    skipped: skippedCount
+  };
 }

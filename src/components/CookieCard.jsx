@@ -4,6 +4,8 @@ const CATEGORY_CLASS = {
   analytics: 'cookie-card__tag--analytics',
   marketing: 'cookie-card__tag--marketing',
   functional: 'cookie-card__tag--functional',
+  personalization: 'cookie-card__tag--personalization',
+  tracking: 'cookie-card__tag--tracking',
 };
 
 export default function CookieCard({

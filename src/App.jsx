@@ -4,12 +4,29 @@ import Toggle from './components/Toggle.jsx';
 import CookieCard from './components/CookieCard.jsx';
 import cookieCrumbledUrl from '../extension/CookieCrumbled.png?url';
 import cookieUncrumbledUrl from '../extension/CookieUncrumbled.png?url';
-import { classifyCookie, scrambleCookie, resetTracking, scanAndProcessCookies, getStats } from '../extension/cookieManager.js';
+import {
+  scrambleCookie,
+  resetTracking,
+  scanAndProcessCookies,
+  getAllCookiesAcrossStores,
+  classifyCookiesBatch,
+  mapCategoryToUI,
+  categoryKindForCard,
+  isScrambled,
+  isTrackingCategory
+} from '../extension/cookieManager.js';
 import './App.css';
 
 const LOCK_HINT_SUMMARY = 'Turn on protection to use the cookie summary.';
 const LOCK_HINT_SETTINGS = 'Turn on protection to change these settings.';
 const LOCK_HINT_ADVANCED = 'Turn on protection to open advanced controls.';
+
+function rowKeyFor(row) {
+  const c = row.cookie;
+  if (!c) return row.name;
+  const sid = c.storeId != null && c.storeId !== '' ? c.storeId : '';
+  return `${sid}:${c.domain}:${c.name}:${c.path || '/'}`;
+}
 
 export default function App() {
   const [screen, setScreen] = useState('main');
@@ -44,32 +61,36 @@ export default function App() {
       
       // Load cookies
       await loadCookies(stored.cookieAllowlist ? new Set(stored.cookieAllowlist) : new Set());
-      
-      // Set stats from global tracking
-      setStats(getStats());
     }
     init();
   }, []);
 
-  // Load cookies from current tab
   const loadCookies = async (allowlist = cookieAllowlist) => {
     try {
-      // Get ALL cookies, not just current tab
-      const cookies = await browser.cookies.getAll({});
-      
+      const cookies = await getAllCookiesAcrossStores();
+      const labels = await classifyCookiesBatch(cookies);
+
       const rows = [];
-      
-      for (const cookie of cookies) {
-        // For now, show all cookies without classification
+      for (let i = 0; i < cookies.length; i++) {
+        const cookie = cookies[i];
+        const ml = labels[i];
         rows.push({
           name: cookie.name,
-          category: 'Unknown',
-          categoryKind: 'functional',
-          allowed: !allowlist.has(cookie.name),
-          cookie: cookie
+          category: mapCategoryToUI(ml),
+          categoryKind: categoryKindForCard(ml),
+          allowed: !allowlist.has(cookie.name) && !isScrambled(cookie),
+          cookie
         });
       }
-      
+
+      let harmful = 0;
+      let safe = 0;
+      for (const ml of labels) {
+        if (isTrackingCategory(ml)) harmful++;
+        else safe++;
+      }
+      setStats({ total: cookies.length, harmful, safe });
+
       setCookieRows(rows);
       console.log('Loaded cookies:', rows.length);
     } catch (error) {
@@ -98,61 +119,68 @@ export default function App() {
     return () => window.removeEventListener('keydown', onKey);
   }, [helpOpen]);
 
-  const crumbleCookie = async (name) => {
-    // Add to allowlist (inverted logic - allowlist means "don't allow")
+  const crumbleCookie = async (row) => {
+    const c = row.cookie;
+    if (!c) {
+      console.warn('CookieCrumblr: missing cookie object for row', row.name);
+      return;
+    }
+
+    const name = c.name;
     const newAllowlist = new Set(cookieAllowlist);
     newAllowlist.add(name);
     setCookieAllowlist(newAllowlist);
-    
-    // Save to storage
+
     await browser.storage.local.set({ cookieAllowlist: Array.from(newAllowlist) });
-    
-    // Scramble the cookie immediately
-    const tabs = await browser.tabs.query({ active: true, currentWindow: true });
-    if (tabs[0]) {
-      const url = new URL(tabs[0].url);
-      const cookies = await browser.cookies.getAll({ 
-        domain: url.hostname,
-        name: name
-      });
-      if (cookies[0]) {
-        await scrambleCookie(cookies[0]);
-      }
+
+    try {
+      await scrambleCookie(c);
+    } catch (e) {
+      console.error('CookieCrumblr: scramble failed', e);
     }
-    
-    // Reload cookies to reflect changes
+
     await loadCookies(newAllowlist);
   };
 
-  const requestDeleteCookie = async (name) => {
-    setExitingNames((prev) => new Set(prev).add(name));
-    
+  const requestDeleteCookie = async (row) => {
+    const c = row.cookie;
+    if (!c) {
+      console.warn('CookieCrumblr: missing cookie object for delete', row.name);
+      return;
+    }
+
+    const rk = rowKeyFor(row);
+    setExitingNames((prev) => new Set(prev).add(rk));
+
     try {
-      const tabs = await browser.tabs.query({ active: true, currentWindow: true });
-      if (tabs[0]) {
-        const url = new URL(tabs[0].url);
-        const cookieUrl = `http${tabs[0].url.startsWith('https') ? 's' : ''}://${url.hostname}`;
-        await browser.cookies.remove({ url: cookieUrl, name: name });
-        console.log('Cookie deleted:', name);
-      }
+      const host = c.domain.startsWith('.') ? c.domain.slice(1) : c.domain;
+      const path = c.path && c.path.length > 0 ? c.path : '/';
+      const cookieUrl = `http${c.secure ? 's' : ''}://${host}${path}`;
+      await browser.cookies.remove({
+        url: cookieUrl,
+        name: c.name,
+        storeId: c.storeId
+      });
+      console.log('Cookie deleted:', c.name, c.domain);
+      await loadCookies();
     } catch (error) {
       console.error('Error deleting cookie:', error);
     }
   };
 
-  const finishRemoveCookie = useCallback((name) => {
-    setCookieRows((rows) => rows.filter((row) => row.name !== name));
+  const finishRemoveCookie = useCallback((rk) => {
+    setCookieRows((rows) => rows.filter((row) => rowKeyFor(row) !== rk));
     setExitingNames((prev) => {
       const next = new Set(prev);
-      next.delete(name);
+      next.delete(rk);
       return next;
     });
   }, []);
 
-  const handleCookieRowTransitionEnd = (e, name) => {
+  const handleCookieRowTransitionEnd = (e, rk) => {
     if (e.target !== e.currentTarget) return;
     if (e.propertyName !== 'opacity') return;
-    if (exitingNames.has(name)) finishRemoveCookie(name);
+    if (exitingNames.has(rk)) finishRemoveCookie(rk);
   };
 
   const handleRestart = useCallback(async () => {
@@ -202,7 +230,6 @@ export default function App() {
                   resetTracking();
                   await scanAndProcessCookies();
                   await loadCookies();
-                  setStats(getStats());
                 }
               }}
               aria-pressed={protectionOn}
@@ -329,16 +356,18 @@ export default function App() {
                   No cookies in this list.
                 </li>
               ) : (
-                cookieRows.map((row) => (
+                cookieRows.map((row) => {
+                  const rk = rowKeyFor(row);
+                  return (
                   <li
-                    key={row.name}
+                    key={rk}
                     className={`cookie-list__item ${
-                      exitingNames.has(row.name)
+                      exitingNames.has(rk)
                         ? 'cookie-list__item--removing'
                         : ''
                     }`}
                     onTransitionEnd={(e) =>
-                      handleCookieRowTransitionEnd(e, row.name)
+                      handleCookieRowTransitionEnd(e, rk)
                     }
                   >
                     <CookieCard
@@ -346,11 +375,12 @@ export default function App() {
                       category={row.category}
                       categoryKind={row.categoryKind}
                       crumbled={!row.allowed}
-                      onCrumble={() => crumbleCookie(row.name)}
-                      onDelete={() => requestDeleteCookie(row.name)}
+                      onCrumble={() => crumbleCookie(row)}
+                      onDelete={() => requestDeleteCookie(row)}
                     />
                   </li>
-                ))
+                  );
+                })
               )}
             </ul>
 
