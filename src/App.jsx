@@ -4,83 +4,86 @@ import Toggle from './components/Toggle.jsx';
 import CookieCard from './components/CookieCard.jsx';
 import cookieCrumbledUrl from '../extension/CookieCrumbled.png?url';
 import cookieUncrumbledUrl from '../extension/CookieUncrumbled.png?url';
+import { classifyCookie, scrambleCookie, resetTracking, scanAndProcessCookies, getStats } from '../extension/cookieManager.js';
 import './App.css';
 
-// Message types for communication with popup.js
-const MESSAGE_TYPES = {
-  INIT_DATA: 'INIT_DATA',
-  TOGGLE_PROTECTION: 'TOGGLE_PROTECTION',
-  TOGGLE_BLOCK_HARMFUL: 'TOGGLE_BLOCK_HARMFUL',
-  TOGGLE_CLIPBOARD: 'TOGGLE_CLIPBOARD',
-  TOGGLE_COOKIE_ALLOWED: 'TOGGLE_COOKIE_ALLOWED',
-  DELETE_COOKIE: 'DELETE_COOKIE',
-  REFRESH_COOKIES: 'REFRESH_COOKIES',
-  SCRAMBLE_COMPLETE: 'SCRAMBLE_COMPLETE',
-  COOKIES_DATA: 'COOKIES_DATA'
-};
-
-const LOCK_HINT_SUMMARY =
-  'Turn on protection to use the cookie summary.';
-const LOCK_HINT_SETTINGS =
-  'Turn on protection to change these settings.';
-const LOCK_HINT_ADVANCED =
-  'Turn on protection to open advanced controls.';
-
-// Send message to popup.js
-function sendToPopup(type, payload) {
-  console.log('📤 React sending to popup.js:', type, payload);
-  window.postMessage({ type, payload, source: 'react' }, '*');
-}
+const LOCK_HINT_SUMMARY = 'Turn on protection to use the cookie summary.';
+const LOCK_HINT_SETTINGS = 'Turn on protection to change these settings.';
+const LOCK_HINT_ADVANCED = 'Turn on protection to open advanced controls.';
 
 export default function App() {
   const [screen, setScreen] = useState('main');
   const [protectionOn, setProtectionOn] = useState(true);
   const [blockHarmful, setBlockHarmful] = useState(true);
-  const [clipboardProtection, setClipboardProtection] = useState(false);
+  const [clipboardProtection, setClipboardProtection] = useState(true);
   const [cookieRows, setCookieRows] = useState([]);
   const [stats, setStats] = useState({ total: 0, harmful: 0, safe: 0 });
   const [exitingNames, setExitingNames] = useState(() => new Set());
   const [helpOpen, setHelpOpen] = useState(false);
+  const [cookieAllowlist, setCookieAllowlist] = useState(() => new Set());
 
-  // Listen for messages from popup.js
+  // Load settings and cookies on mount
   useEffect(() => {
-    const handleMessage = (event) => {
-      if (event.source !== window) return;
-      
-      const { type, payload } = event.data;
-      
-      // Only process messages from popup.js (not our own)
-      if (event.data.source === 'react') return;
-      
-      console.log('📥 React received from popup.js:', type, payload);
-      
-      switch (type) {
-        case MESSAGE_TYPES.INIT_DATA:
-          console.log('🎯 Setting initial data - cookies:', payload.cookies?.length, 'stats:', payload.stats);
-          setCookieRows(payload.cookies || []);
-          setStats(payload.stats || { total: 0, harmful: 0, safe: 0 });
-          setProtectionOn(payload.settings?.protectionOn ?? true);
-          setBlockHarmful(payload.settings?.blockHarmful ?? true);
-          setClipboardProtection(payload.settings?.clipboardProtection ?? false);
-          console.log('✅ Initial data set in React state');
-          break;
-          
-        case MESSAGE_TYPES.COOKIES_DATA:
-          console.log('🎯 Updating cookies data - cookies:', payload.cookies?.length, 'stats:', payload.stats);
-          setCookieRows(payload.cookies || []);
-          setStats(payload.stats || { total: 0, harmful: 0, safe: 0 });
-          console.log('✅ Cookies data updated in React state');
-          break;
-          
-        case MESSAGE_TYPES.SCRAMBLE_COMPLETE:
-          console.log('Scramble complete:', payload);
-          break;
+    async function init() {
+      // Load settings from storage
+      const stored = await browser.storage.local.get(['settings', 'cookieAllowlist']);
+      if (stored.settings) {
+        setProtectionOn(stored.settings.protectionOn ?? true);
+        setBlockHarmful(stored.settings.blockHarmful ?? true);
+        setClipboardProtection(stored.settings.clipboardProtection ?? true);
       }
-    };
-    
-    window.addEventListener('message', handleMessage);
-    return () => window.removeEventListener('message', handleMessage);
+      if (stored.cookieAllowlist) {
+        setCookieAllowlist(new Set(stored.cookieAllowlist));
+      }
+      
+      // If protection is on, scan cookies first to populate tracking
+      const isProtectionOn = stored.settings?.protectionOn ?? true;
+      if (isProtectionOn) {
+        await scanAndProcessCookies();
+      }
+      
+      // Load cookies
+      await loadCookies(stored.cookieAllowlist ? new Set(stored.cookieAllowlist) : new Set());
+      
+      // Set stats from global tracking
+      setStats(getStats());
+    }
+    init();
   }, []);
+
+  // Load cookies from current tab
+  const loadCookies = async (allowlist = cookieAllowlist) => {
+    try {
+      // Get ALL cookies, not just current tab
+      const cookies = await browser.cookies.getAll({});
+      
+      const rows = [];
+      
+      for (const cookie of cookies) {
+        // For now, show all cookies without classification
+        rows.push({
+          name: cookie.name,
+          category: 'Unknown',
+          categoryKind: 'functional',
+          allowed: !allowlist.has(cookie.name),
+          cookie: cookie
+        });
+      }
+      
+      setCookieRows(rows);
+      console.log('Loaded cookies:', rows.length);
+    } catch (error) {
+      console.error('Error loading cookies:', error);
+    }
+  };
+
+  // Save settings to storage
+  const saveSettings = async (newSettings) => {
+    await browser.storage.local.set({ 
+      settings: newSettings,
+      cookieAllowlist: Array.from(cookieAllowlist)
+    });
+  };
 
   useEffect(() => {
     if (screen !== 'details') setHelpOpen(false);
@@ -95,13 +98,46 @@ export default function App() {
     return () => window.removeEventListener('keydown', onKey);
   }, [helpOpen]);
 
-  const crumbleCookie = (name) => {
-    sendToPopup(MESSAGE_TYPES.TOGGLE_COOKIE_ALLOWED, { cookieName: name, allowed: false });
+  const crumbleCookie = async (name) => {
+    // Add to allowlist (inverted logic - allowlist means "don't allow")
+    const newAllowlist = new Set(cookieAllowlist);
+    newAllowlist.add(name);
+    setCookieAllowlist(newAllowlist);
+    
+    // Save to storage
+    await browser.storage.local.set({ cookieAllowlist: Array.from(newAllowlist) });
+    
+    // Scramble the cookie immediately
+    const tabs = await browser.tabs.query({ active: true, currentWindow: true });
+    if (tabs[0]) {
+      const url = new URL(tabs[0].url);
+      const cookies = await browser.cookies.getAll({ 
+        domain: url.hostname,
+        name: name
+      });
+      if (cookies[0]) {
+        await scrambleCookie(cookies[0]);
+      }
+    }
+    
+    // Reload cookies to reflect changes
+    await loadCookies(newAllowlist);
   };
 
-  const requestDeleteCookie = (name) => {
+  const requestDeleteCookie = async (name) => {
     setExitingNames((prev) => new Set(prev).add(name));
-    sendToPopup(MESSAGE_TYPES.DELETE_COOKIE, { cookieName: name });
+    
+    try {
+      const tabs = await browser.tabs.query({ active: true, currentWindow: true });
+      if (tabs[0]) {
+        const url = new URL(tabs[0].url);
+        const cookieUrl = `http${tabs[0].url.startsWith('https') ? 's' : ''}://${url.hostname}`;
+        await browser.cookies.remove({ url: cookieUrl, name: name });
+        console.log('Cookie deleted:', name);
+      }
+    } catch (error) {
+      console.error('Error deleting cookie:', error);
+    }
   };
 
   const finishRemoveCookie = useCallback((name) => {
@@ -119,30 +155,55 @@ export default function App() {
     if (exitingNames.has(name)) finishRemoveCookie(name);
   };
 
-  const handleRestart = useCallback(() => {
+  const handleRestart = useCallback(async () => {
     setScreen('main');
-    sendToPopup(MESSAGE_TYPES.REFRESH_COOKIES, {});
+    
+    // Reset to defaults
+    const defaultSettings = {
+      protectionOn: true,
+      blockHarmful: true,
+      clipboardProtection: true
+    };
+    
+    setProtectionOn(true);
+    setBlockHarmful(true);
+    setClipboardProtection(true);
+    setCookieAllowlist(new Set());
+    
+    await browser.storage.local.set({ 
+      settings: defaultSettings,
+      cookieAllowlist: []
+    });
+    
+    // Reload cookies
+    await loadCookies(new Set());
   }, []);
 
   return (
     <div className="popup-root">
       <div className="popup-card">
-        <div
-          className={`popup-views ${screen === 'details' ? 'popup-views--details' : ''}`}
-        >
-          <main
-            className="popup-screen popup-screen--main"
-            aria-hidden={screen !== 'main'}
-          >
+        {screen === 'main' ? (
+          <main className="popup-screen popup-screen--main">
             <h1 className="popup-title">CookieCrumblr</h1>
 
             <button
               type="button"
               className="protection-control"
-              onClick={() => {
+              onClick={async () => {
                 const nextOn = !protectionOn;
+                console.log('Protection toggled:', nextOn);
                 setProtectionOn(nextOn);
-                sendToPopup(MESSAGE_TYPES.TOGGLE_PROTECTION, { enabled: nextOn });
+                setBlockHarmful(nextOn);
+                setClipboardProtection(nextOn);
+                await saveSettings({ protectionOn: nextOn, blockHarmful: nextOn, clipboardProtection: nextOn });
+                
+                // When protection is turned on, reset tracking and rescan all cookies
+                if (nextOn) {
+                  resetTracking();
+                  await scanAndProcessCookies();
+                  await loadCookies();
+                  setStats(getStats());
+                }
               }}
               aria-pressed={protectionOn}
               aria-label={
@@ -203,9 +264,10 @@ export default function App() {
                 <Toggle
                   label="Block harmful cookies"
                   checked={blockHarmful}
-                  onChange={(enabled) => {
+                  onChange={async (enabled) => {
+                    console.log('Block harmful toggled:', enabled);
                     setBlockHarmful(enabled);
-                    sendToPopup(MESSAGE_TYPES.TOGGLE_BLOCK_HARMFUL, { enabled });
+                    await saveSettings({ protectionOn, blockHarmful: enabled, clipboardProtection });
                   }}
                   id="toggle-block"
                   disabled={!protectionOn}
@@ -213,9 +275,10 @@ export default function App() {
                 <Toggle
                   label="Clipboard protection"
                   checked={clipboardProtection}
-                  onChange={(enabled) => {
+                  onChange={async (enabled) => {
+                    console.log('Clipboard protection toggled:', enabled);
                     setClipboardProtection(enabled);
-                    sendToPopup(MESSAGE_TYPES.TOGGLE_CLIPBOARD, { enabled });
+                    await saveSettings({ protectionOn, blockHarmful, clipboardProtection: enabled });
                   }}
                   id="toggle-clipboard"
                   disabled={!protectionOn}
@@ -243,11 +306,8 @@ export default function App() {
               </div>
             </div>
           </main>
-
-          <section
-            className="popup-screen popup-screen--details"
-            aria-hidden={screen !== 'details'}
-          >
+        ) : (
+          <section className="popup-screen popup-screen--details">
             <header className="details-header">
               <button
                 type="button"
@@ -304,23 +364,19 @@ export default function App() {
                 Recrumble cookies
               </button>
             </div>
-          </section>
-        </div>
 
-        {screen === 'details' && (
-          <button
-            type="button"
-            className="btn-help"
-            onClick={() => setHelpOpen(true)}
-            aria-haspopup="dialog"
-            aria-expanded={helpOpen}
-            aria-controls="help-dialog"
-          >
-            Help
-          </button>
-        )}
+            <button
+              type="button"
+              className="btn-help"
+              onClick={() => setHelpOpen(true)}
+              aria-haspopup="dialog"
+              aria-expanded={helpOpen}
+              aria-controls="help-dialog"
+            >
+              Help
+            </button>
 
-        {helpOpen && screen === 'details' && (
+            {helpOpen && (
           <div
             className="help-backdrop"
             role="presentation"
@@ -414,7 +470,9 @@ export default function App() {
             </div>
           </div>
         )}
-      </div>
-    </div>
-  );
+      </section>
+    )}
+  </div>
+</div>
+);
 }
