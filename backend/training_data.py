@@ -9,7 +9,7 @@ import numpy as np
 df = pd.read_csv("open-cookie-database.csv")
 
 # Select features and target
-feature_cols = ["Platform", "Cookie / Data Key name", "Retention period"]
+feature_cols = ["Cookie / Data Key name", "Retention period"]
 target_col = "Category"
 
 df = df[feature_cols + [target_col]].dropna()

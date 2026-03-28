@@ -5,13 +5,13 @@ def load_model(model_path="models/knn_model.pkl"):
     with open(model_path, "rb") as f:
         return pickle.load(f)
 
-def predict_category(platform: str, cookie_name: str, retention_period: str, model_path="models/knn_model.pkl"):
+def predict_category(cookie_name: str, retention_period: str, model_path="models/knn_model.pkl"):
     bundle = load_model(model_path)
     model = bundle["model"]
     feature_encoders = bundle["feature_encoders"]
     target_encoder = bundle["target_encoder"]
 
-    features = {"Platform": platform, "Cookie / Data Key name": cookie_name, "Retention period": retention_period}
+    features = {"Cookie / Data Key name": cookie_name, "Retention period": retention_period}
     encoded = []
 
     for col, val in features.items():
@@ -28,7 +28,6 @@ def predict_category(platform: str, cookie_name: str, retention_period: str, mod
 
 if __name__ == "__main__":
     category = predict_category(
-        platform="Google Tag Manager",
         cookie_name="cookiePreferences",
         retention_period="2 years"
     )
